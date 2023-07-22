@@ -1,25 +1,40 @@
 "use client";
 
 import "./globals.css";
-import type { Metadata } from "next";
 import { Inter } from "next/font/google";
-import { cookies } from "next/headers";
-import PostForm from "./PostForm";
-import Link from "next/link";
-import LogoutButton from "./LogoutButton";
 import AppWrapper from "./AppWrapper";
 import { Provider } from "react-redux";
 import { store, persistor } from "@/store";
+import { QueryClient } from '@tanstack/react-query'
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
 import { PersistGate } from "redux-persist/integration/react";
 
+import AsyncStorage from '@react-native-async-storage/async-storage'
+import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client'
+import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister'
+import { RouteChangeProvider } from 'nextjs13-router-events';
+
 const inter = Inter({ subsets: ["latin"] });
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false, // default: true
+      cacheTime: 1000 * 60 * 60, // 1 hour
+      staleTime: 1000 * 60 * 10 // 10 minutes
+    },
+  },
+})
+
+const asyncStoragePersister = createAsyncStoragePersister({
+  storage: AsyncStorage
+})
 
 export default function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-
+  
   return (
     <html lang="en">
       <head>
@@ -33,9 +48,14 @@ export default function RootLayout({
       >
       <Provider store={store}>
         <PersistGate loading={null} persistor={persistor}>
-          <AppWrapper>
-            {children}
-          </AppWrapper>
+          <PersistQueryClientProvider client={queryClient} persistOptions={{ persister: asyncStoragePersister }}>
+            <RouteChangeProvider>
+              <AppWrapper>
+                {children}
+              </AppWrapper>
+            </RouteChangeProvider>
+            <ReactQueryDevtools initialIsOpen={false} />
+          </PersistQueryClientProvider>
         </PersistGate>
       </Provider>
       </body>

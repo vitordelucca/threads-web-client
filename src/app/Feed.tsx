@@ -3,214 +3,226 @@
 import { useEffect, useState } from 'react';
 import FeedItem from './FeedItem';
 import PostForm from './PostForm';
-import { selectFeed, selectLastFeed, setFeed, setLastFeed } from '@/store/prevSlice';
-import { useDispatch, useSelector } from 'react-redux';
-import { useRouter } from 'next/navigation';
+import ScrollToTop from 'react-scroll-to-top';
+
+import useFetcher from '@/hooks/useFetcher';
+import {
+  useInfiniteQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
+import useInfiniteScroll from '@/hooks/useInfiniteScroll';
+import { useRouteChange } from 'nextjs13-router-events';
 
 export default function Feed(props: any) {
   const token = props.token;
   const post_id = props.post_id;
   const user_id = props.user_id;
   
-  const router = useRouter();
+  const setFollowing = props.setFollowing;
+  const setMuting = props.setMuting;
+  const setBlocking = props.setBlocking;
+  const setFeedLoaded = props.setFeedLoaded;
 
-  const [thread, setThread] = useState(<></> as JSX.Element);
-  const [threadData, setThreadData] = useState([] as any[]);
-  const [items, setItems] = useState([] as JSX.Element[]);
-  const [nextMaxId, setNextMaxId] = useState(null as string | null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isFirstLoad, setIsFirstLoad] = useState(true);
-  const [refreshClicked, setRefreshClicked] = useState(false);
+  const [threadData, setThreadData] = useState(null as any);
+  const [isBlocked, setIsBlocked] = useState(false);
 
-  const dispatch = useDispatch();
-  const prevFeed = useSelector(selectFeed);
-  const lastPrevFeed = useSelector(selectLastFeed);
+  const queryClient = useQueryClient()
+  const fetcher = useFetcher();
 
-  const handleScroll = () =>  {
-    if (window.innerHeight + document.documentElement.scrollTop < document.documentElement.offsetHeight || isLoading) {
-      return;
+  useRouteChange({
+    onRouteChangeStart: () => {
+      setIsBlocked(true);
+    },
+    onRouteChangeComplete: () => {
+      setIsBlocked(false);
     }
+  });
 
-    if (nextMaxId === null || nextMaxId === undefined) {
-      return;
+  useInfiniteScroll(() => {
+    if (status === 'success' && !isFetching && hasNextPage && !isBlocked) {
+      fetchNextPage();
     }
-    
-    fetchData();
-  };
+  });
 
-  const fetchData = async () => {
-    setIsLoading(true);
-  
-    try {
-      let data = {} as any;
+  const {
+    status,
+    data,
+    error,
+    hasNextPage,
+    isFetching,
+    fetchNextPage,
+    refetch,
+    remove,
+  } = useInfiniteQuery(
+    ['feed', { user_id: user_id, post_id: post_id }],
+    async ({ pageParam = null }) => {
+      let apiData = {} as any;
 
       if (user_id) {
-        const response = await fetch('/api/feed/' + user_id, {
-          method: 'POST',
-          body: JSON.stringify({
-            token: token,
-            max_id: nextMaxId
-          }),
-          headers: {
-            'Content-Type': 'application/json'
-          }
-        })
-        data = await response.json();
-        data.items = data.threads;
-
-        setNextMaxId(data.next_max_id);
+        apiData = await fetcher('/api/feed/' + user_id, {
+          max_id: pageParam == 'NONE' ? '' : pageParam
+        });
+        apiData.items = apiData.threads;
+        apiData.nextPage = apiData.next_max_id;
       }
       else if (post_id) {
-        const response = await fetch('/api/post/' + post_id, {
-          method: 'POST',
-          body: JSON.stringify({
-            token: token,
-            max_id: nextMaxId
-          }),
-          headers: {
-            'Content-Type': 'application/json'
-          }
-        })
-        data = await response.json();
+        apiData = await fetcher('/api/post/' + post_id, {
+          max_id: pageParam
+        });
+        apiData.items = apiData.reply_threads;
 
-        data.items = data.reply_threads;
-
-        setThreadData(data.containing_thread.thread_items[data.containing_thread.thread_items.length - 1].post);
-
-        if (data.containing_thread) {
-          setThread(
-            <FeedItem key={data.containing_thread.id} token={token} item={data.containing_thread}/>
-          )
-        }
-        
-        setNextMaxId(data.paging_tokens.downwards);
+        apiData.nextPage = apiData.paging_tokens.downwards;
       }
       else {
-        const fetchPrevFeed = ((Date.now()/1000) - lastPrevFeed) > 60*5;
+        apiData = await fetcher('/api/feed', {
+          max_id: pageParam
+        });
         
-        // Grab a new feed if it'd been long enough.
-        // Always attempt to paginate.
-        if (!prevFeed || fetchPrevFeed || nextMaxId) {
-          const response = await fetch('/api/feed', {
-            method: 'POST',
-            body: JSON.stringify({
-              token: token,
-              max_id: nextMaxId
-            }),
-            headers: {
-              'Content-Type': 'application/json'
-            }
-          })
-          data = await response.json();
+        apiData.nextPage = apiData.next_max_id;
+      }
 
-          // We're fetching the main /api/feed and not /api/post/xxx, so it's
-          // the main feed. Only cache the first page.
-          if (!nextMaxId) {
-            dispatch(setFeed(data));
-            dispatch(setLastFeed(Date.now()/1000));
+      return apiData;
+    },
+    {
+      getPreviousPageParam: (firstPage) => null,
+      getNextPageParam: (lastPage) => lastPage.nextPage ?? undefined,
+      keepPreviousData: true,
+    },
+  )
+
+  useEffect( () => {
+    if (status == 'success') {
+      for (let page of data?.pages) {
+
+        if (post_id && page.containing_thread) {
+          setThreadData(page.containing_thread);
+        }
+
+        for (let item of page.items) {
+          for (const post of item.posts) {
+            if (user_id && post.user.pk == user_id && post.user.friendship_status) {
+              setFollowing(post.user.friendship_status.following);
+              setMuting(post.user.friendship_status.muting);
+              setBlocking(post.user.friendship_status.blocking);
+              break;
+            }
           }
         }
+      }
+
+      if (setFeedLoaded) {
+        setFeedLoaded(true);
+      }
+    }
+  }, [status, post_id, data, setBlocking, setFeedLoaded, setFollowing, setMuting, user_id]);
+
+  const addPost = (newPost: any) => {
+    // Use the setQueryData method to manipulate & update the data
+    queryClient.setQueryData(['feed', {}], (oldData: any) => {
+
+      if (!oldData) {
+        return;
+      }
+      // We will add the newPost into the first page 
+      // (you may need to adjust this based on your needs).
+      let updatedData = JSON.parse(JSON.stringify(oldData));
+
+      // Add check if pages exist 
+      if (updatedData.pages) {
+
+        if (threadData) {
+          console.log('threadData', threadData, updatedData.pages[0].items);
+          // Make sure newPost gets added on the top of the list in page 1
+          updatedData.pages[0].items.unshift({
+            thread_items: [threadData.thread_items[threadData.thread_items.length - 1].post, newPost],
+            posts: [threadData.thread_items[threadData.thread_items.length - 1].post, newPost]
+          });
+        }
         else {
-          data = prevFeed;
-        }
-        
-        setNextMaxId(data.next_max_id);
-      }
-
-      const newItems = [] as JSX.Element[];
-      for (let item of data.items) {
-        let exists = items.reduce((acc, cur) => {
-          if (cur.key == item.id) return true;
-          return acc;
-        }, false);
-
-        if (item.posts.length > 0 && !exists) {
-          newItems.push(
-            <FeedItem key={item.id} token={token} item={item}/>
-          )
+          updatedData.pages[0].items.unshift({
+            thread_items: [newPost],
+            posts: [newPost]
+          });
         }
       }
-  
-      setItems(prevItems => [...prevItems, ...newItems]);
-    } catch (error) {
-      console.log(error);
-    } finally {
-      setIsLoading(false);
-      setRefreshClicked(false);
-    }
-  };
 
-  const addPost = (item: any) => {
-    const newPost = <FeedItem key={item.id} token={token} item={{posts: [item]}}/>
-    setItems(prevItems => [newPost, ...prevItems])
-    let newFeed = JSON.parse(JSON.stringify(prevFeed));
+      console.log(updatedData);
 
-    console.log([threadData, item]);
-    newFeed.items = [{
-      threaded_items: [threadData, item],
-      posts: [threadData, item]
-    },
-    ...prevFeed.items];
-    dispatch(setFeed(newFeed));
-  }
+      return updatedData;
+    })
+    
+    if (post_id) {
+      queryClient.setQueryData(['feed', { user_id: user_id, post_id: post_id }], (oldData: any) => {
+        // We will add the newPost into the first page 
+        // (you may need to adjust this based on your needs).
+        let updatedData = JSON.parse(JSON.stringify(oldData));
 
-  const handleRefreshBtn = async (e: any) => {
-    e.preventDefault();
+        // Add check if pages exist 
+        if (updatedData.pages) {
 
-    setItems([]);
-    setNextMaxId(null);
+          updatedData.pages[0].items.unshift({
+            thread_items: [newPost],
+            posts: [newPost]
+          });
+        }
 
-    setRefreshClicked(true);
+        console.log(updatedData);
 
-    // Only set last feed for homepage.
-    if (!post_id && !user_id) {
-      dispatch(setLastFeed(0));
+        return updatedData;
+      })
     }
   }
-  
-  useEffect(() => {
-    if (refreshClicked) {
-      fetchData();
-    }
-  }, [refreshClicked])
-
-  useEffect(() => {
-    if (isFirstLoad) {
-      setIsFirstLoad(false);
-      fetchData();
-    }
-  }, []);
-
-  useEffect(() => {
-    window.addEventListener('scroll', handleScroll);
-    return () => {
-      window.removeEventListener('scroll', handleScroll);
-    }
-  }, [isLoading, nextMaxId]);
 
   return (
     <>
-      {(post_id) && 
+      {(post_id) &&
         <div>
-          {thread}
+          { (status === 'success' && threadData !== null) &&
+              <FeedItem key={threadData.id} token={token} item={threadData} />
+          }
         </div>
       }
       <div>
-        {!user_id && 
+        {!user_id &&
           <PostForm token={token} addPost={addPost} post_id={post_id} />
         }
         <hr className="border-b-gray-800" />
       </div>
-      {(!post_id) &&
-        <button className="text-white float-right" onClick={handleRefreshBtn}>
+        <button className="text-white float-right" onClick={() => {
+          remove();
+          refetch({
+            refetchPage: (_: any, index: any) => index === 0,
+          });
+        }}>
           <svg className="h-10 w-10 text-white mr-5 mt-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
           </svg>
         </button>
-      }
       <div>
-        {items}
+        {status === 'loading' ? (
+          <p className="text-white text-center">Loading...</p>
+        ) : status === 'error' ? (
+          <span className="text-white">Error: {(error as any).message}</span>
+        ) : (
+          <>
+            { data?.pages.map((page, i) => (
+              <>
+                {page.items.map((item: any) => (
+                  <FeedItem key={item.id} token={token} item={item} />
+                ))}
+              </>
+            ))}
+          </>
+        )}
+
+        <ScrollToTop
+          smooth
+          viewBox="0 0 256 256"
+          svgPath="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm37.66-101.66a8,8,0,0,1-11.32,11.32L136,107.31V168a8,8,0,0,1-16,0V107.31l-18.34,18.35a8,8,0,0,1-11.32-11.32l32-32a8,8,0,0,1,11.32,0Z"
+          className='scroll-to-top flex items-center justify-center'
+        />
       </div>
     </>
   )
+
 }

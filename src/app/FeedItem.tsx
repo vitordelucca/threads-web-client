@@ -1,17 +1,6 @@
 "use client";
 
-import { setCookie } from 'cookies-next';
-import Image from 'next/image'
-import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
-
-import TimeAgo from 'javascript-time-ago'
-import ReactTimeAgo from 'react-time-ago'
-import en from 'javascript-time-ago/locale/en.json'
 import PostItem from './PostItem';
-
-TimeAgo.addDefaultLocale(en)
 
 export default function FeedItem(props: any) {
   const token = props.token;

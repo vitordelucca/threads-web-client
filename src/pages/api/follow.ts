@@ -5,25 +5,19 @@ import { setTimeout } from 'timers/promises';
 import * as fs from 'fs';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
- 
-  const { token } = req.body;
-  const user_id = req.query.slug as string;
-
-  // console.log(token);
-  // console.log(user_id);
-
+  const { token, user_id } = req.body;
+  
   let payload: any = {};
 
-  if (fs.existsSync('./json/user_fetch.json')) {
-    console.log('sent test user fetch');
-    payload = JSON.parse(fs.readFileSync('./json/user_fetch.json', 'utf8'));
+  if (fs.existsSync('./json/follow.json')) {
+    console.log('sent test follow');
+    payload = JSON.parse(fs.readFileSync('./json/follow.json', 'utf8'));
     await setTimeout(1000);
   }
   else {
     try {
       const client = new Client({ token });
-
-      payload = await client.users.fetch(user_id);
+      payload = await client.friendships.follow(user_id);
     } catch (e: any) {
       payload['error'] = e.message;
     }
